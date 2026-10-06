@@ -1,5 +1,7 @@
 # Fighting-game theme: art preview (iteration 1)
 
+**Live animated preview:** [solo (iteration 1)](https://dfigravity.github.io/nowplaying-theme-sdk/demo/?solo) · [versus](https://dfigravity.github.io/nowplaying-theme-sdk/demo/). It autoplays a ~45 s loop; buttons trigger every move, special and super. `H` hides the controls, `?obs` makes it a transparent 1920x1080 browser source.
+
 All art is original (no Capcom assets, fonts or names): hand-drawn pixel fonts, Endesga 32
 palette snapped to 12-bit, under 15 colours per sprite, navy outlines so it reads over any camera.
 The background in the screenshots is a blurred stand-in for a webcam; in OBS the overlay is

@@ -1,0 +1,780 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DJSF v1 Preview</title>
+<style>
+  :root {
+    --bg: #0d0d14; --panel: #171726; --ink: #e6e9f2; --muted: #8b9bb4; --line: #2a2d44;
+    --accent: #feae34; --hot: #e43b44; --cool: #2ce8f5;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) { --bg: #eef0f5; --panel: #ffffff; --ink: #181425; --muted: #5a6988; --line: #c0cbdc; }
+  }
+  :root[data-theme="light"] { --bg: #eef0f5; --panel: #ffffff; --ink: #181425; --muted: #5a6988; --line: #c0cbdc; }
+  :root[data-theme="dark"] { --bg: #0d0d14; --panel: #171726; --ink: #e6e9f2; --muted: #8b9bb4; --line: #2a2d44; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 13px/1.4 ui-monospace, "SF Mono", Menlo, monospace; }
+  html:has(body.obs), body.obs { background: transparent; overflow: hidden; }
+  #wrap { padding: 16px; display: flex; flex-direction: column; gap: 12px; align-items: center; }
+  body.obs #wrap { padding: 0; }
+  #stage { position: relative; width: 1920px; height: 1080px; transform-origin: top left;
+    overflow: hidden; background: #000; }
+  body.obs #stage { background: transparent; }
+  #stageBox { position: relative; }
+  #cam, #fx { position: absolute; inset: 0; width: 1920px; height: 1080px; }
+  #fx { image-rendering: pixelated; image-rendering: crisp-edges; }
+  #controls { width: 100%; max-width: 1200px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 12px; display: grid; gap: 10px; }
+  body.obs #controls { display: none; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .row > b { color: var(--muted); font-weight: 600; min-width: 92px; }
+  button, select { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 9px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.special { border-color: color-mix(in srgb, var(--hot) 55%, var(--line)); }
+  button.chat { border-color: color-mix(in srgb, var(--cool) 55%, var(--line)); }
+  button.on { background: var(--accent); color: #181425; border-color: var(--accent); }
+  .note { color: var(--muted); }
+  body.solo .vs-only { display: none; }
+  @media (max-width: 640px) { #wrap { padding: 16px 16px; } .row > b { min-width: 100%; } }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stageBox"><div id="stage"><canvas id="cam" width="1920" height="1080"></canvas><canvas id="fx" width="384" height="216"></canvas></div></div>
+  <div id="controls">
+    <div class="row"><b>Demo</b>
+      <button id="mode"></button>
+      <button id="auto" class="on">Autoplay on</button>
+      <button data-act="track">Track change (VS card)</button>
+      <button data-act="hypefull">Fill HYPE</button>
+      <button data-act="reset">Reset round</button>
+      <button data-act="maxout">Jump to 39 hits</button>
+      <button class="vs-only" data-act="djko">DJ K.O.</button>
+      <button class="vs-only" data-act="chatko">Chat K.O.</button>
+      <span class="note">H hides these controls · <code>?obs</code> = transparent 1920×1080 OBS source · <code>?solo</code> = iteration 1, DJ side only</span>
+    </div>
+    <div class="row"><b>Moves</b><span id="moves" class="row"></span></div>
+    <div class="row"><b>Specials</b><span id="specials" class="row"></span></div>
+    <div class="row vs-only"><b>Chat (v3)</b>
+      <button class="chat" data-act="punch">!punch 5</button>
+      <button class="chat" data-act="cheer">Cheer 100 bits</button>
+      <button class="chat" data-act="sub">Sub (150)</button>
+    </div>
+    <div class="row"><b>Look</b>
+      <select id="bg"><option value="room">Camera: dim room</option><option value="day">Camera: bright wall</option><option value="green">Camera: green</option><option value="none">No camera (black)</option></select>
+      <select id="drain" class="vs-only"><option value="outer">P1 health anchored at screen edge</option><option value="inner">P1 health anchored at centre</option></select>
+    </div>
+  </div>
+</div>
+<script src="assets.js"></script>
+<script>
+"use strict";
+// ---------------------------------------------------------------------------- setup
+const A = window.DJSF_ASSETS;
+const VW = 384, VH = 216, SCALE = 5;
+const params = new URLSearchParams(location.search);
+if (params.has("obs")) {                     // OBS browser source: nothing but the overlay pixels
+  document.body.classList.add("obs");
+  document.documentElement.style.background = "transparent";
+}
+// ?solo: iteration 1 (Triode, 2026-10-06) - one side only, no PvP. The top bar becomes the
+// HYPE bar, the timer shows BPM, and every chat/P2 element is gone.
+const SOLO = params.has("solo");
+if (SOLO) document.body.classList.add("solo");
+const fx = document.getElementById("fx");
+const ctx = fx.getContext("2d");
+ctx.imageSmoothingEnabled = false;
+fx.style.width = "1920px"; fx.style.height = "1080px";
+
+function fitStage() {
+  const stage = document.getElementById("stage"), box = document.getElementById("stageBox");
+  const obs = document.body.classList.contains("obs");
+  const availW = obs ? innerWidth : Math.max(320, Math.min(innerWidth - 32, 1920));
+  const availH = obs ? innerHeight : Math.max(200, innerHeight - (document.getElementById("controls").offsetHeight + 56));
+  let s = Math.min(availW / 1920, availH / 1080, 1);
+  stage.style.transform = `scale(${s})`;
+  box.style.width = 1920 * s + "px"; box.style.height = 1080 * s + "px";
+}
+addEventListener("resize", fitStage);
+
+const hex = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+const LUT = {}; for (const [k, v] of Object.entries(A.lut.hex)) LUT[k] = v.map(hex);
+
+const images = {};
+function loadImages() {
+  return Promise.all(Object.entries(A.images).map(([k, src]) => new Promise(res => {
+    const im = new Image(); im.onload = () => { images[k] = im; res(); }; im.src = src;
+  })));
+}
+
+// palette swap: exact-colour map of the gold ramp onto any other LUT row (CPS-style)
+const swapCache = {};
+function sheetFor(sheet, rampName) {
+  if (!rampName || rampName === "gold") return images[sheet];
+  const key = sheet + ":" + rampName;
+  if (swapCache[key]) return swapCache[key];
+  const im = images[sheet], cv = document.createElement("canvas");
+  cv.width = im.width; cv.height = im.height;
+  const g = cv.getContext("2d"); g.drawImage(im, 0, 0);
+  const d = g.getImageData(0, 0, cv.width, cv.height), p = d.data;
+  const src = LUT.gold.slice(1), dst = LUT[rampName].slice(1);
+  const map = new Map(src.map((c, i) => [c.join(","), dst[i]]));
+  for (let i = 0; i < p.length; i += 4) {
+    if (!p[i + 3]) continue;
+    const t = map.get(p[i] + "," + p[i + 1] + "," + p[i + 2]);
+    if (t) { p[i] = t[0]; p[i + 1] = t[1]; p[i + 2] = t[2]; }
+  }
+  g.putImageData(d, 0, 0);
+  return (swapCache[key] = cv);
+}
+// tint for white fonts: multiply everything except the navy outline
+function tinted(sheet, tintHex) {
+  const key = sheet + "#" + tintHex;
+  if (swapCache[key]) return swapCache[key];
+  const im = images[sheet], cv = document.createElement("canvas");
+  cv.width = im.width; cv.height = im.height;
+  const g = cv.getContext("2d"); g.drawImage(im, 0, 0);
+  const d = g.getImageData(0, 0, cv.width, cv.height), p = d.data, t = hex(tintHex);
+  for (let i = 0; i < p.length; i += 4) {
+    if (!p[i + 3] || (p[i] === 17 && p[i + 1] === 17 && p[i + 2] === 34)) continue;
+    p[i] = p[i] * t[0] / 255 | 0; p[i + 1] = p[i + 1] * t[1] / 255 | 0; p[i + 2] = p[i + 2] * t[2] / 255 | 0;
+  }
+  g.putImageData(d, 0, 0);
+  return (swapCache[key] = cv);
+}
+
+// ---------------------------------------------------------------------------- sprites
+const F = {};
+for (const [sheet, data] of Object.entries(A.json))
+  for (const [name, fr] of Object.entries(data.frames)) F[name] = { sheet, ...fr.frame };
+
+// Aseprite-style frame tags -> animations (frame order is preserved in the json)
+const ANIM = {};
+for (const data of Object.values(A.json)) {
+  const names = Object.keys(data.frames);
+  for (const t of data.meta.frameTags)
+    ANIM[t.name] = names.slice(t.from, t.to + 1).map(n => ({ n, d: data.frames[n].duration }));
+}
+function animFrame(tag, frames, loop = true) {          // frames elapsed at 60 fps -> frame name
+  const a = ANIM[tag], total = a.reduce((s, f) => s + f.d, 0);
+  let ms = frames * 1000 / 60;
+  if (loop) ms %= total; else if (ms >= total) return { name: a[a.length - 1].n, done: true };
+  for (const f of a) { if (ms < f.d) return { name: f.n, done: false }; ms -= f.d; }
+  return { name: a[a.length - 1].n, done: true };
+}
+
+function spr(name, x, y, o = {}) {
+  const f = F[name]; if (!f) return;
+  const img = o.tint ? tinted(f.sheet, o.tint) : sheetFor(f.sheet, o.ramp);
+  const s = o.scale || 1, w = o.cw ?? f.w;
+  const sx = o.cx ?? 0;
+  ctx.save();
+  if (o.alpha !== undefined) ctx.globalAlpha = o.alpha;
+  if (o.flipY) {
+    ctx.translate(Math.round(x), Math.round(y) + f.h * s); ctx.scale(o.flip ? -1 : 1, -1);
+    if (o.flip) ctx.translate(-w * s, 0);
+    ctx.drawImage(img, f.x + sx, f.y, w, f.h, 0, 0, w * s, f.h * s);
+  } else if (o.flip) {
+    ctx.translate(Math.round(x) + w * s, Math.round(y)); ctx.scale(-1, 1);
+    ctx.drawImage(img, f.x + sx, f.y, w, f.h, 0, 0, w * s, f.h * s);
+  } else {
+    ctx.drawImage(img, f.x + sx, f.y, w, f.h, Math.round(x), Math.round(y), w * s, f.h * s);
+  }
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------------- BMFont
+const FONTS = {};
+function parseFnt(name, txt) {
+  const chars = {}; let lineHeight = 16;
+  for (const line of txt.split("\n")) {
+    const kv = {}; line.replace(/(\w+)=("[^"]*"|\S+)/g, (_, k, v) => { kv[k] = v.replace(/"/g, ""); });
+    if (line.startsWith("common")) lineHeight = +kv.lineHeight;
+    if (line.startsWith("char ")) chars[+kv.id] = { x: +kv.x, y: +kv.y, w: +kv.width, h: +kv.height,
+      xo: +kv.xoffset, yo: +kv.yoffset, adv: +kv.xadvance };
+  }
+  FONTS[name] = { chars, lineHeight, sheet: name };
+}
+for (const [n, t] of Object.entries(A.fnt)) parseFnt(n, t);
+
+function measure(font, text) {
+  const f = FONTS[font]; let w = 0;
+  for (const ch of text) { const g = f.chars[ch.codePointAt(0)] || f.chars[63]; w += g.adv; }
+  return w;
+}
+function text(font, str, x, y, o = {}) {
+  const f = FONTS[font], s = o.scale || 1;
+  const img = o.tint ? tinted(f.sheet, o.tint) : sheetFor(f.sheet, o.ramp);
+  let w = measure(font, str) * s;
+  let cx = Math.round(o.align === "center" ? x - w / 2 : o.align === "right" ? x - w : x);
+  ctx.save(); if (o.alpha !== undefined) ctx.globalAlpha = o.alpha;
+  for (const ch of str) {
+    const g = f.chars[ch.codePointAt(0)] || f.chars[63];
+    if (g.w) ctx.drawImage(img, g.x, g.y, g.w, g.h, cx + g.xo * s, Math.round(y) + g.yo * s, g.w * s, g.h * s);
+    cx += g.adv * s;
+  }
+  ctx.restore();
+  return w;
+}
+
+// ---------------------------------------------------------------------------- fake webcam
+function paintCam(mode) {
+  const cv = document.getElementById("cam"), g = cv.getContext("2d");
+  g.clearRect(0, 0, 1920, 1080);
+  if (mode === "none") { g.fillStyle = "#000"; g.fillRect(0, 0, 1920, 1080); return; }
+  if (mode === "green") { g.fillStyle = "#13b04a"; g.fillRect(0, 0, 1920, 1080); return; }
+  const day = mode === "day";
+  g.filter = "blur(14px) saturate(0.7)";              // read as soft webcam video, not as overlay
+  let gr = g.createLinearGradient(0, 0, 0, 1080);
+  gr.addColorStop(0, day ? "#e9e4da" : "#1d1830"); gr.addColorStop(1, day ? "#c9c1b3" : "#0b0a12");
+  g.fillStyle = gr; g.fillRect(0, 0, 1920, 1080);
+  // window / LED panels
+  g.fillStyle = day ? "#fbfaf6" : "#2a1a4a"; g.fillRect(1240, 120, 420, 360);
+  if (!day) { for (let i = 0; i < 9; i++) { g.fillStyle = `hsl(${280 + i * 9} 80% ${30 + (i % 3) * 8}%)`; g.fillRect(80 + i * 60, 160, 40, 300); } }
+  // the DJ: head + shoulders
+  g.fillStyle = day ? "#6b5546" : "#3b2c35";
+  g.beginPath(); g.ellipse(960, 430, 120, 150, 0, 0, Math.PI * 2); g.fill();
+  g.fillStyle = day ? "#2f3a55" : "#18172a";
+  g.beginPath(); g.ellipse(960, 860, 360, 260, 0, Math.PI, 0); g.fill();
+  // decks
+  g.fillStyle = day ? "#1d1d22" : "#08080c"; g.fillRect(320, 820, 1280, 260);
+  for (const x of [520, 1400]) { g.fillStyle = day ? "#3a3a44" : "#16161e"; g.beginPath(); g.arc(x, 930, 120, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = day ? "#9aa" : "#5a6988"; g.lineWidth = 6; g.stroke(); }
+  g.filter = "none";
+  g.fillStyle = "rgba(0,0,0,0.2)"; g.fillRect(0, 0, 1920, 1080);
+}
+
+// ---------------------------------------------------------------------------- game data
+const MOVES = [
+  ["QUICK CUT", 20], ["FADER SLAM", 15], ["BASSLINE SWAP", 40], ["VOCAL SWAP", 35],
+  ["FULL KILL", 30], ["HIGH DUCK", 15], ["EQ SWEEP IN", 20], ["THE DROP", 60],
+  ["TRANSFORMER", 30], ["HARMONIC MIX", 40], ["DOUBLE DROP", 150], ["BACKSPIN", 80],
+];
+const SPECIALS = [
+  ["SUB CANNON", 120], ["CROSSFIRE", 100], ["FULL HANDOVER", 140], ["BLACKOUT DROP", 160],
+  ["RISING STORM", 150], ["SPIN CYCLE", 140],
+];
+const RANKS = [[3, "rank_b_nice"], [6, "rank_b_solid"], [10, "rank_b_wicked"], [15, "rank_b_savage"], [20, "rank_b_lethal"], [25, "rank_b_maximum"], [30, "rank_b_ultra"]];
+const TIER_AT = [3, 6, 10, 15, 25, 40];
+const TIER_RAMP = ["gold", "gold", "yellow", "orange", "orange", "red", "rainbow"];
+const RAINBOW = ["red", "orange", "yellow", "green", "cyan", "magenta"];
+const STYLE = [[0, "style_d"], [150, "style_c"], [300, "style_b"], [500, "style_a"], [650, "style_s"], [800, "style_ss"], [950, "style_sss"]];
+
+const S = {};
+function resetRound() {
+  Object.assign(S, {
+    f: 0, hitstop: 0, shake: 0, shakeAmp: 0, darken: 0, barFlash: 0,
+    p: [{ hp: 144, trail: 144, flash: 0, name: "OSH", wins: 1 }, { hp: 144, trail: 144, flash: 0, name: "CHAT", wins: 0 }],
+    timer: 99, timerSub: 0,
+    hype: 0, hypeActive: 0, maxBlink: 0,
+    combo: { hits: 0, pts: 0, digits: [], idle: 0, state: "idle", dropT: 0, rank: null, rankT: 0, best: "" },
+    style: 0,
+    callouts: [], sparks: [], banners: [], queue: [], lastChatHit: -9999,
+    wax: { tag: "wax_idle", t: 0 }, fx: [], mood: [{ m: "idle", t: 0 }, { m: "idle", t: 0 }],
+    dizzy: 0, ko: null, gain: null,
+    vs: null,
+    ticker: "NOW PLAYING ▶ KERRI CHANDLER — RAIN ▶ 8A 124 BPM ▶ ",
+    tickerX: 0,
+    track: { artist: "KERRI CHANDLER", title: "RAIN", key: "8A", bpm: 124 },
+  });
+}
+resetRound();
+const NEXT_TRACKS = [
+  { artist: "Ron Trent", title: "Altered States", key: "9A", bpm: 124 },
+  { artist: "Peggy Gou", title: "It Makes You Forget", key: "4A", bpm: 123 },
+  { artist: "Floating Points", title: "Vocoder", key: "10A", bpm: 126 },
+  { artist: "Bicep", title: "Glue", key: "11A", bpm: 130 },
+];
+let nextTrack = 0;
+
+// ---------------------------------------------------------------------------- events
+function tierOf(h) { let t = 0; for (const a of TIER_AT) if (h >= a) t++; return t; }
+function rankSet() { return RANKS; }
+
+const WAX_LOOPS = new Set(["wax_idle", "wax_dizzy"]);
+const WAX_HOLDS = new Set(["wax_ko", "wax_win"]);
+function setWax(tag, t0 = 0) {
+  if (S.ko && !WAX_HOLDS.has(tag)) return;
+  if (S.dizzy > 0 && tag !== "wax_dizzy" && tag !== "wax_ko") return;
+  S.wax = { tag, t: t0 };
+}
+function playFx(tag, x, y, delay = 0, o = {}) { S.fx.push({ tag, x, y, t: -delay, ...o }); }
+function setMood(side, m, frames) { S.mood[side] = { m, t: frames }; }
+function bigDigits() { return tierOf(S.combo.hits) >= 4 && S.combo.state !== "falling"; }
+function laneY() { return bigDigits() ? 124 : 104; }
+
+function knockOut(side) {
+  if (S.ko) return;
+  S.ko = { side, t: 0 };
+  S.hitstop = 14; S.darken = 30; S.shake = 10; S.shakeAmp = 3;
+  callout("K.O.!", "red", side === 0 ? 1 : 0);
+  if (side === 0) { S.dizzy = 0; setWax("wax_ko"); setMood(0, "ko", 9999); setMood(1, "hype", 9999); }
+  else { setWax("wax_win"); setMood(1, "ko", 9999); setMood(0, "hype", 9999); }
+  playFx("super_burst", side === 0 ? 0 : 320, -24);
+  S.queue.push({ at: S.f + 300, fn: resetRound });
+}
+
+function callout(str, rampName, side = 0, special = false) {
+  for (const c of S.callouts) if (c.side === side) { c.slot++; c.dim = true; }
+  S.callouts = S.callouts.filter(c => c.slot < 3);
+  S.callouts.push({ str, ramp: rampName, side, t: 0, slot: 0, special });
+  const w = measure("callout_font", str);
+  const cx = side ? 288 : 96;
+  if (tierOf(S.combo.hits) >= 2 && side === 0) playFx("spark_med", cx - w / 2 - 14, laneY() - 12);
+  else S.sparks.push({ x: cx - w / 2 - 10, y: laneY() - 4, t: 0 });
+}
+
+function damage(who, px) {
+  const p = S.p[who];
+  p.hp = Math.max(0, p.hp - px); p.flash = 2;
+}
+
+function djMove(name, pts, special = false) {
+  const c = S.combo;
+  if (S.vs || S.ko) return;
+  let mult = S.hypeActive > 0 ? 2 : 1;
+  const reversal = S.f - S.lastChatHit < 120;
+  let label = name + "!", rampName = special ? "red" : "gold";
+  if (special && S.hype >= 1) { superFire(name); return; }
+  c.hits += special ? 2 : 1; c.pts += pts * mult; c.idle = 0; c.state = "live";
+  c.best = c.best || name;
+  pushDigits();
+  S.hitstop = special ? 10 : 6;
+  if (reversal) { callout("REVERSAL!", "cyan", 0); }
+  callout(label, rampName, 0, special);
+  damage(1, Math.max(1, Math.round(pts * 0.05)));      // demo tuning: a full set of moves + one super ≈ a KO
+  if (S.hypeActive <= 0 && S.hype < 1) S.gain = { from: S.hype, t: 6 };   // new span flashes white
+  S.hype = Math.min(1, S.hype + pts * mult / 1500 * 3);
+  S.style = Math.min(1000, S.style + pts);
+  const t = tierOf(c.hits);
+  const rk = [...rankSet()].reverse().find(([n]) => c.hits >= n);
+  if (rk && rk[1] !== c.rank) { c.rank = rk[1]; c.rankT = 0; }
+  if (t >= 2) { S.shake = t >= 3 ? 6 : 4; S.shakeAmp = t >= 3 ? 2 : 1; }
+  setWax("wax_punch", 3);                         // jump to the extended frame so hit-stop holds it
+  if (rk && c.rankT === 0) setMood(0, "hype", 90);
+  if (t >= 5) setMood(1, "hurt", 600);            // chat looks scared at tier 5+
+  if (special) specialFx(name);
+  if (!SOLO && S.p[1].hp === 0) knockOut(1);
+}
+
+function specialFx(name) {
+  const y = laneY();
+  if (name === "CROSSFIRE") [0, 6, 12].forEach((d, i) => playFx("slash", 40 + i * 8, y - 14 + i * 9, d));
+  else if (name === "FULL HANDOVER") playFx("swap_arrows", 96 - 8, y - 34, 0, { loops: 3 });
+  else if (SOLO) { playFx("spark_big", 150, y - 26); playFx("spark_big", 168, y - 18, 4); }
+  else { playFx("spark_big", 296, -8); playFx("spark_big", 330, -6, 4); }
+}
+
+function superFire(name) {
+  const c = S.combo;
+  c.hits += 3; c.pts += 600; c.idle = 0; c.state = "live"; pushDigits();
+  S.hitstop = 14; S.darken = 40; S.barFlash = 2; S.shake = 10; S.shakeAmp = 3;
+  S.hype = 0; S.hypeActive = 60 * 8;
+  callout("SUPER!", "white", 0);
+  S.queue.push({ at: S.f + 18, fn: () => callout("HYPER " + name + "!", "red", 0, true) });
+  for (let i = 0; i < 12; i++) playFx(i % 3 ? "spark_med" : "spark_big", 30 + Math.random() * 300 | 0, 30 + Math.random() * 120 | 0, i * 3);
+  playFx("super_burst", 96 - 32, laneY() - 32);
+  setWax("wax_super"); setMood(0, "hype", 240); setMood(1, "hurt", 240);
+  damage(1, Math.round(144 * 0.4));
+  if (!SOLO && S.p[1].hp === 0) knockOut(1);
+  S.style = Math.min(1000, S.style + 300);
+}
+
+function chatHit(name, px) {
+  if (S.vs || S.ko || SOLO) return;
+  damage(0, px);
+  setMood(0, "hurt", 60); setMood(1, "hype", 60);
+  if (px >= 14) { S.dizzy = 150; S.wax = { tag: "wax_dizzy", t: 0 }; } else setWax("wax_hurt");
+  if (S.p[0].hp === 0) knockOut(0);
+  S.lastChatHit = S.f;
+  S.style = Math.max(0, S.style - 300);
+  callout(name, "cyan", 1);
+  S.hitstop = 6;
+}
+
+function pushDigits() {
+  const str = String(S.combo.hits);
+  S.combo.digits = [...str].map((d, i) => ({ d, pop: S.combo.digits[i] && S.combo.digits[i].d === d ? 99 : 0 }));
+}
+
+function trackChange() {
+  if (S.vs) return;
+  const nt = NEXT_TRACKS[nextTrack++ % NEXT_TRACKS.length];
+  S.vs = { t: 0, from: S.track, to: nt };
+  S.track = nt;
+  S.ticker = `NOW PLAYING ▶ ${nt.artist} — ${nt.title} ▶ ${nt.key} ${nt.bpm} BPM ▶ `;
+}
+
+// ---------------------------------------------------------------------------- update
+function step() {
+  S.f++;
+  if (S.shake > 0) S.shake--;
+  if (S.darken > 0) S.darken--;
+  if (S.barFlash > 0) S.barFlash--;
+  for (const p of S.p) {
+    if (p.flash > 0) p.flash--;
+    if (p.trail > p.hp && S.f % 4 === 0) p.trail--;      // red trail decays 1px / 4f
+    if (p.trail < p.hp) p.trail = p.hp;
+  }
+  if (S.vs) { S.vs.t++; if (S.vs.t > 190) S.vs = null; }
+  if (S.hitstop > 0) {                                   // hit-stop freezes everything below,
+    S.hitstop--;                                         // except the pop of whatever just landed
+    for (const c of S.callouts) if (c.t < 4) c.t++;
+    for (const d of S.combo.digits) if (d.pop < 2) d.pop++;
+    if (S.combo.rankT < 2) S.combo.rankT++;
+    return;
+  }
+
+  if (++S.timerSub >= 60) { S.timerSub = 0; S.timer = S.timer > 0 ? S.timer - 1 : 99; }
+  if (S.f % 2 === 0) S.tickerX++;
+  S.maxBlink++;
+  if (S.hypeActive > 0) S.hypeActive--;
+  S.style = Math.max(0, S.style - 0.15);
+
+  S.wax.t++;
+  const wf = animFrame(S.wax.tag, S.wax.t, WAX_LOOPS.has(S.wax.tag));
+  if (wf.done && !WAX_HOLDS.has(S.wax.tag)) S.wax = { tag: "wax_idle", t: 0 };
+  if (S.dizzy > 0 && --S.dizzy === 0) S.wax = { tag: "wax_idle", t: 0 };
+  for (const m of S.mood) if (m.t > 0 && --m.t === 0) m.m = "idle";
+  for (const e of S.fx) e.t++;
+  S.fx = S.fx.filter(e => e.t < 0 || !animFrame(e.tag, e.t, false).done || (e.loops && e.t < e.loops * 12));
+  if (S.ko) S.ko.t++;
+  if (S.gain && --S.gain.t <= 0) S.gain = null;
+  for (const q of S.queue.filter(q => S.f >= q.at)) q.fn();
+  S.queue = S.queue.filter(q => S.f < q.at);
+  for (const c of S.callouts) c.t++;
+  S.callouts = S.callouts.filter(c => c.t < 4 + 36 + 6 + 4);
+  for (const s of S.sparks) s.t++;
+  S.sparks = S.sparks.filter(s => s.t < 6);
+  for (const d of S.combo.digits) d.pop++;
+
+  const c = S.combo;
+  c.rankT++;
+  if (c.state === "live") { if (++c.idle > 60 * 5) { c.state = "dropping"; c.dropT = 0; } }
+  else if (c.state === "dropping") { if (++c.dropT > 90) { c.state = "falling"; c.dropT = 0; } }
+  else if (c.state === "falling") {
+    if (++c.dropT > 12 + 24) {
+      if (c.hits >= 2) S.banners.push({ str: `${c.hits} HITS • ${Math.round(c.pts).toLocaleString()} PTS`, t: 0 });
+      Object.assign(c, { hits: 0, pts: 0, digits: [], state: "idle", rank: null, best: "" });
+    }
+  }
+  for (const b of S.banners) b.t++;
+  S.banners = S.banners.filter(b => b.t < 120);
+}
+
+// ---------------------------------------------------------------------------- draw
+function drawHypeBar() {                      // solo: the top bar is the super meter
+  spr("bar_frame_l", 10, 8);
+  const active = S.hypeActive > 0;
+  const v = active ? S.hypeActive / (60 * 8) : S.hype;
+  const w = Math.round(144 * Math.min(1, v));
+  const full = !active && S.hype >= 1;
+  const blink = (S.maxBlink >> 3) % 2;
+  const ramp = full ? (blink ? "magenta" : "white") : active ? ((S.f >> 2) % 2 ? "yellow" : "orange") : undefined;
+  const g0 = S.gain ? Math.round(144 * S.gain.from) : w;
+  for (let x = 0; x < w; x += 8) {
+    const cw = Math.min(8, w - x);
+    const white = S.barFlash > 0 || x + cw > g0;
+    spr(white ? "bar_drain_15" : "bar_drain_07", 12 + x, 10, { cw, ramp: white ? undefined : ramp });
+  }
+  spr(`portrait_dj_${S.mood[0].m}`, 2, 20);
+  spr("nameplate_normal", 28, 20); text("font8", S.p[0].name, 34, 21);
+  if (w < 144 - 26) text("font8", "HYPE", 155, 9, { align: "right", tint: "#0099db" });   // label in the empty well
+  if (full) spr(blink ? "max_on" : "max_off", 146, 21);
+  else if (active) text("font8", "x2", 148, 21, { tint: "#fee761" });
+}
+
+function drawBar(i) {
+  if (SOLO) { if (i === 0) drawHypeBar(); return; }
+  const p = S.p[i], left = i === 0;
+  const fx0 = left ? 12 : 228;
+  spr(left ? "bar_frame_l" : "bar_frame_r", fx0 - 2, 8);
+  const anchorOuter = document.getElementById("drain").value === "outer";
+  // which end of the 144px well the health is anchored to
+  const fromLeft = left ? anchorOuter : !anchorOuter;
+  const low = p.hp < 36 && (S.f >> 3) % 2 === 0;
+  const flash = p.flash > 0 || S.barFlash > 0;
+  const drawSpan = (a, b, tile, opt) => {      // fill [a,b) of the well, in px from the anchor
+    for (let x = a; x < b; x += 8) {
+      const w = Math.min(8, b - x);
+      const sx = fromLeft ? fx0 + x : fx0 + 144 - x - w;
+      spr(tile, sx, 10, { ...opt, cw: w, cx: fromLeft ? 0 : 8 - w });
+    }
+  };
+  drawSpan(p.hp, p.trail, "bar_trail_8", { tint: "#e43b44" });
+  drawSpan(0, p.hp, flash ? "bar_drain_15" : "bar_drain_07", { ramp: low ? "red" : undefined });
+  // name plate
+  if (left) { spr("nameplate_normal", 28, 20); text("font8", p.name, 34, 21); }
+  else { spr("nameplate_normal", 284, 20, { flip: true }); text("font8", p.name, 350, 21, { align: "right" }); }
+  spr(`portrait_${left ? "dj" : "chat"}_${S.mood[i].m}`, left ? 2 : 358, 20);
+  for (let k = 0; k < 2; k++) spr(k < p.wins ? "roundwin_won" : "roundwin_empty", left ? 136 + k * 10 : 240 - k * 10, 21);
+}
+
+function drawMeter(i) {
+  if (SOLO) return;                             // solo: HYPE lives in the top bar
+  const left = i === 0, x0 = left ? 8 : 260, y0 = 198;
+  spr(left ? "meter_frame_l" : "meter_frame_r", x0, y0);
+  const v = i === 0 ? (S.hypeActive > 0 ? S.hypeActive / (60 * 8) : S.hype) : 0.2;
+  const full = v >= 1;
+  for (let s = 0; s < 3; s++) {
+    const segV = Math.max(0, Math.min(1, v * 3 - s)); if (!segV) continue;
+    const w = Math.round(36 * segV);
+    const tile = full ? ((S.maxBlink >> 3) % 2 ? "meter_seg_max" : "meter_seg_flash") : segV >= 1 ? "meter_seg_full" : "meter_seg_charge";
+    const segX = left ? x0 + 2 + s * 38 : x0 + 114 - (s + 1) * 36 - s * 2;
+    spr(tile, left ? segX : segX + 36 - w, y0 + 2, { cw: w, cx: left ? 0 : 36 - w });
+  }
+  text("font8", left ? "HYPE" : "CHAT", left ? x0 + 1 : x0 + 115, y0 - 10, { align: left ? "left" : "right", tint: "#2ce8f5" });
+  if (full && left) spr((S.maxBlink >> 3) % 2 ? "max_on" : "max_off", x0 + 96, y0 - 10);
+  if (S.hypeActive > 0 && left) text("font8", "x2", x0 + 96, y0 - 10, { tint: "#fee761" });
+}
+
+function drawTicker() {
+  spr("ticker_strip", 124, 205);
+  ctx.save(); ctx.beginPath(); ctx.rect(127, 205, 130, 10); ctx.clip();
+  const w = measure("font8", S.ticker);
+  const off = S.tickerX % w;
+  text("font8", S.ticker, 128 - off, 205, { tint: "#feae34" });
+  text("font8", S.ticker, 128 - off + w, 205, { tint: "#feae34" });
+  ctx.restore();
+}
+
+function drawCombo() {
+  const c = S.combo; if (!c.digits.length || c.hits < 2) return;
+  let y = 48, x = 20;                                        // block top; callouts own the lane below
+  if (c.state === "dropping") x += (S.f >> 1) % 2 ? 1 : -1;
+  const big = bigDigits();
+  if (c.state === "falling") {
+    const t = c.dropT;                                         // 32px fall, 2-step bounce, 12f
+    const path = [0, 2, 6, 12, 20, 32, 28, 32, 30, 32, 32, 32];
+    y += t < 12 ? path[t] : 32;
+    if (t >= 12) return drawRank(x, y + 30, c.dropT - 12);
+  }
+  const t = tierOf(c.hits);
+  let r = TIER_RAMP[Math.min(t, 6)];
+  if (r === "rainbow") r = RAINBOW[(S.f >> 1) % RAINBOW.length];
+  if (S.hypeActive > 0 && (S.f >> 2) % 2) r = "white";
+  const step = big ? 32 : 16, digit = big ? "big_" : "hit_";
+  const blockW = c.digits.length * step;
+  if (t >= 3 && c.state !== "falling")                         // lightning arc behind the numerals
+    spr(animFrame("lightning", S.f).name, x + blockW / 2 - 16, y - 12);
+  c.digits.forEach((d, i) => {
+    const pop = d.pop;
+    const dx = x + i * step, dy = y + (pop === 1 ? -2 : 0);
+    if (pop === 0) spr(digit + d.d, dx - (big ? 20 : 10), dy - (big ? 28 : 14), { scale: 2, ramp: "white" });
+    else spr(digit + d.d, dx, dy, { ramp: r });
+  });
+  if (big) {
+    spr("big_label_hits", x + blockW + 4, y + 18, { ramp: r });
+    drawRank(x + blockW + 4, y + 40, c.rankT);
+  } else {
+    spr("label_hits", x + blockW + 4, y + 14, { ramp: r });
+    drawRank(x, y + 30, c.rankT);
+  }
+}
+
+function drawFire() {
+  const t = tierOf(S.combo.hits); if (t < 4 || S.combo.state === "falling") return;
+  const fr = animFrame("fire_edge", S.f).name, cr = animFrame("fire_corner", S.f).name;
+  for (let x = 16; x < VW - 16; x += 16) spr(fr, x, VH - 16);
+  spr(cr, 0, VH - 16); spr(cr, VW - 16, VH - 16, { flip: true });
+  if (t >= 6) {                                                 // double border at the top tier
+    for (let x = 16; x < VW - 16; x += 16) spr(fr, x, 0, { flipY: true });
+    spr(cr, 0, 0, { flipY: true }); spr(cr, VW - 16, 0, { flipY: true, flip: true });
+    spr(animFrame("lightning", S.f + 20).name, VW - 48, 40);
+  }
+}
+
+function drawMascot() {
+  const w = animFrame(S.wax.tag, S.wax.t, WAX_LOOPS.has(S.wax.tag));
+  const mx = 0, my = SOLO ? 150 : 124;          // solo: no bottom meter, Wax stands lower
+  spr(w.name, mx, my, { ramp: S.hypeActive > 0 && (S.f >> 3) % 2 ? "yellow" : undefined });
+  if (S.wax.tag === "wax_dizzy") {                              // mini-records orbit the head
+    for (let k = 0; k < 3; k++) {
+      const a = S.f * 0.12 + k * 2.094;
+      spr(animFrame("dizzy_record", S.f + k * 4).name, mx + 29 + Math.round(Math.cos(a) * 12), my + 2 + Math.round(Math.sin(a) * 4));
+    }
+  }
+}
+
+function drawFx() {
+  for (const e of S.fx) {
+    if (e.t < 0) continue;
+    spr(animFrame(e.tag, e.t, !!e.loops).name, e.x, e.y);
+  }
+}
+
+function drawRank(x, y, t) {
+  const c = S.combo; if (!c.rank) return;
+  if (c.state === "falling" && t > 24) return;
+  const sc = t === 0 ? 3 : t === 1 ? 2 : 1;
+  const f = F[c.rank];
+  spr(c.rank, x + (sc > 1 ? -(f.w * (sc - 1)) / 2 : 0), y + (sc > 1 ? -(f.h * (sc - 1)) / 2 : 0),
+    { scale: sc, ramp: t < 2 ? "white" : undefined });
+}
+
+function drawCallouts() {
+  for (const c of S.callouts) {
+    const cx = c.side ? 288 : 96;
+    let y = laneY() + c.slot * 18, x = cx, sc = 1, rampName = c.ramp;
+    const t = c.t;
+    const maxSc = Math.max(1, Math.floor(376 / measure("callout_font", c.str)));
+    if (t === 0) { sc = Math.min(3, maxSc); rampName = "white"; }
+    else if (t === 1) { sc = Math.min(2, maxSc); rampName = "white"; }
+    else if (t === 2) { x += c.side ? -2 : 2; }
+    if (c.dim && rampName !== "white") rampName = "dim";
+    let alpha;
+    const ex = t - (4 + 36);
+    if (ex >= 0) {
+      const slide = Math.min(6, ex);
+      x += (c.side ? 1 : -1) * Math.round(slide * 4);
+      if (ex >= 6) alpha = ex >= 8 ? 0 : 0.5;
+    }
+    if (alpha === 0) continue;
+    text("callout_font", c.str, x, y - 8 * sc, { align: "center", ramp: rampName, scale: sc, alpha });
+  }
+}
+
+function drawSparks() {
+  for (const s of S.sparks) {
+    if (s.t < 0) continue;
+    const fr = Math.min(2, s.t >> 1);
+    spr("spark_small_" + fr, s.x, s.y);
+  }
+}
+
+function drawStyle() {
+  const st = [...STYLE].reverse().find(([n]) => S.style >= n);
+  if (S.style < 60) return;
+  spr(st[1], 102, 20);
+}
+
+function drawVS() {
+  const v = S.vs; if (!v) return;
+  const t = v.t, inF = 8, outAt = 170;
+  // panels slide in from both edges in stepped 24px jumps, meet, hold, then leave
+  let k = t < inF ? t / inF : t > outAt ? Math.max(0, 1 - (t - outAt) / 8) : 1;
+  k = Math.round(k * 8) / 8;
+  const yb = 80;
+  const lx = Math.round(-192 + (12 + 192) * k), rx = Math.round(384 + (180 - 384) * k);
+  spr("vs_panel_l", lx, yb); spr("vs_panel_r", rx, yb);
+  if (k === 1) {
+    text("font16", v.from.title, lx + 40, yb + 20, { tint: "#ffffff" });
+    text("font8", v.from.artist, lx + 34, yb + 38, { tint: "#fee761" });
+    text("font16", v.to.title, rx + 164 - 4, yb + 20, { align: "right" });
+    text("font8", `${v.to.artist}  ${v.to.key} ${v.to.bpm}`, rx + 160 - 4, yb + 38, { align: "right", tint: "#2ce8f5" });
+    const g = F.vs_glyph_normal, gt = t - inF;
+    const sc = gt === 0 ? 3 : gt === 1 ? 2 : 1;
+    const flash = gt < 2 || (gt > 20 && (gt >> 2) % 6 === 0);
+    spr(flash ? "vs_glyph_flash" : "vs_glyph_normal", 192 - g.w * sc / 2, yb + 28 - g.h * sc / 2, { scale: sc });
+  }
+}
+
+function drawBanners() {
+  for (const b of S.banners) {
+    if (b.t > 100 && (b.t >> 1) % 2) continue;
+    text("font16", b.str, 20, 52, { tint: "#fee761" });
+  }
+}
+
+function draw() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, VW, VH);
+  if (S.darken > 0) { ctx.fillStyle = "rgba(17,17,34,0.6)"; ctx.fillRect(0, 0, VW, VH); }
+  let ox = 0, oy = 0;
+  if (S.shake > 0) { ox = (S.shake % 2 ? 1 : -1) * S.shakeAmp; oy = (S.shake % 3 === 0 ? 1 : 0) * Math.min(1, S.shakeAmp); }
+  ctx.setTransform(1, 0, 0, 1, ox, oy);
+  drawFire();
+  drawBar(0); drawBar(1);
+  spr(S.barFlash > 0 || S.hitstop > 8 ? "emblem_flash" : "emblem_normal", 176, 3);
+  if (SOLO) {                                   // solo: BPM in the timer digits (no playback position from NP3)
+    const b = String(Math.round(S.track.bpm));
+    [...b].forEach((d, k) => spr("timer_" + d, 192 - b.length * 5 + k * 10, 20));
+    text("font8", "BPM", 192, 35, { align: "center", tint: "#2ce8f5" });
+  } else {
+  const tm = String(S.timer).padStart(2, "0");
+  const tRamp = S.timer <= 10 && (S.f >> 3) % 2 ? "red" : undefined;
+  spr("timer_" + tm[0], 182, 20, { tint: tRamp ? "#e43b44" : undefined });
+  spr("timer_" + tm[1], 192, 20, { tint: tRamp ? "#e43b44" : undefined });
+  }
+  drawStyle();
+  drawMeter(0); drawMeter(1);
+  drawTicker();
+  drawMascot();
+  drawCombo();
+  drawBanners();
+  drawCallouts();
+  drawSparks();
+  drawFx();
+  drawVS();
+}
+
+// ---------------------------------------------------------------------------- loop + autoplay
+let last = performance.now(), acc = 0, paused = false;
+function frame(now) {
+  acc += Math.min(100, now - last); last = now;
+  if (paused) acc = 0;
+  while (acc >= 1000 / 60) { step(); acc -= 1000 / 60; if (auto) autoplay(); }
+  draw();
+  requestAnimationFrame(frame);
+}
+
+let auto = !params.has("manual"), autoT = 0, autoI = 0;
+const SCRIPT = [
+  [60, () => djMove("QUICK CUT", 20)], [70, () => djMove("FADER SLAM", 15)],
+  [80, () => djMove("BASSLINE SWAP", 40)], [70, () => djMove("HIGH DUCK", 15)],
+  [60, () => djMove("FULL KILL", 30)], [90, () => djMove("SUB CANNON", 120, true)],
+  [80, () => chatHit("!PUNCH", 6)], [40, () => djMove("VOCAL SWAP", 35)],
+  [70, () => djMove("EQ SWEEP IN", 20)], [60, () => djMove("THE DROP", 60)],
+  [70, () => djMove("CROSSFIRE", 100, true)], [60, () => djMove("TRANSFORMER", 30)],
+  [60, () => djMove("HARMONIC MIX", 40)], [60, () => { S.hype = 1; }],
+  [120, () => djMove("BLACKOUT DROP", 160, true)], [60, () => djMove("DOUBLE DROP", 150)],
+  [60, () => chatHit("100 BITS", 14)], [50, () => djMove("BACKSPIN", 80)],
+  [70, () => djMove("QUICK CUT", 20)], [70, () => djMove("FULL HANDOVER", 140, true)],
+  [70, () => djMove("FADER SLAM", 15)], [70, () => djMove("CROSSFIRE", 100, true)],
+  [70, () => djMove("THE DROP", 60)], [70, () => djMove("EQ SWEEP IN", 20)],
+  [80, () => chatHit("NEW SUB!", 16)],
+  [460, () => trackChange()], [260, () => { if (S.p[0].hp < 40 || S.p[1].hp < 40) resetRound(); }],
+];
+function autoplay() {
+  if (++autoT < SCRIPT[autoI][0]) return;
+  autoT = 0; SCRIPT[autoI][1](); autoI = (autoI + 1) % SCRIPT.length;
+}
+
+// ---------------------------------------------------------------------------- controls
+function buildControls() {
+  const mv = document.getElementById("moves"), sp = document.getElementById("specials");
+  for (const [n, p] of MOVES) { const b = document.createElement("button"); b.textContent = n; b.onclick = () => djMove(n, p); mv.append(b); }
+  for (const [n, p] of SPECIALS) { const b = document.createElement("button"); b.className = "special"; b.textContent = n; b.onclick = () => djMove(n, p, true); sp.append(b); }
+  document.querySelectorAll("[data-act]").forEach(b => b.onclick = () => ({
+    track: trackChange, hypefull: () => { S.hype = 1; }, reset: resetRound,
+    maxout: () => { Object.assign(S.combo, { hits: 39, state: "live", idle: 0 }); pushDigits(); djMove("DOUBLE DROP", 150); },
+    djko: () => chatHit("NEW SUB!", 999), chatko: () => { S.p[1].hp = 1; djMove("THE DROP", 60); },
+    punch: () => chatHit("!PUNCH", 1), cheer: () => chatHit("100 BITS", 14), sub: () => chatHit("NEW SUB!", 22),
+  })[b.dataset.act]());
+  const mb = document.getElementById("mode");
+  mb.textContent = SOLO ? "Mode: solo (iteration 1) → versus" : "Mode: versus → solo (iteration 1)";
+  mb.onclick = () => { const q = new URLSearchParams(location.search); SOLO ? q.delete("solo") : q.set("solo", ""); location.search = q.toString().replace(/=(&|$)/g, "$1"); };
+  const ab = document.getElementById("auto");
+  const sync = () => { ab.textContent = auto ? "Autoplay on" : "Autoplay off"; ab.classList.toggle("on", auto); };
+  ab.onclick = () => { auto = !auto; sync(); }; sync();
+  document.getElementById("bg").onchange = e => paintCam(e.target.value);
+  addEventListener("keydown", e => { if (e.key === "h" || e.key === "H") { document.body.classList.toggle("obs"); fitStage(); } });
+}
+
+loadImages().then(() => {
+  buildControls(); paintCam(params.has("obs") ? "none" : "room");
+  if (params.has("obs")) document.getElementById("cam").style.display = "none";
+  fitStage();
+  if (params.has("at")) {                    // ?at=N : jump to frame N of the autoplay and hold
+    for (let i = 0; i < +params.get("at"); i++) { step(); autoplay(); }
+    paused = true;
+  }
+  requestAnimationFrame(frame);
+});
+</script>
+</body>
+</html>
