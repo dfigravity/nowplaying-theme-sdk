@@ -1,0 +1,74 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MIDI tap for NP3 throttle test</title>
+<style>
+  html{color-scheme:dark;background:#15141a;color:#ece9e0;font:14px/1.5 ui-monospace,Menlo,monospace}
+  body{margin:0;padding:24px;max-width:720px}
+  h1{font-size:16px;margin:0 0 8px} p{margin:6px 0;color:#a39fae}
+  select,button{font:inherit;padding:6px 10px;background:#23222b;color:inherit;border:1px solid #34323d;border-radius:4px}
+  button{cursor:pointer} #log{white-space:pre;height:260px;overflow:auto;background:#1d1c24;border:1px solid #34323d;padding:8px;margin-top:12px}
+  .ok{color:#5fc3d6}.bad{color:#ff6a5a} b{color:#ffcc4d}
+</style>
+<h1>MIDI tap → recorder</h1>
+<p>Open in Chrome while rekordbox and NP3 are running (CoreMIDI is multi-client). Start <code>recorder.py</code> first, then load the overlay with Protocol Spy so both streams land in the same file. Raw messages are posted in 250 ms batches as <code>data.type = "midi-batch"</code>; compare with <code>compare_tap.py</code>.</p>
+<p>Port: <select id="port"></select> <button id="start">Start</button> <button id="stop" disabled>Stop</button> <button id="dl">Download local copy</button></p>
+<p id="state" class="bad">Tap not running. Pick the port and press Start; the "messages" counter must climb when you touch a knob before you label anything.</p>
+<p><b>Label the next gesture</b> (click, or type a name and press Enter, then perform it; the label is written into the recording with a timestamp):</p>
+<p id="marks"></p>
+<p><input id="mark" placeholder="custom label, Enter to mark" style="font:inherit;padding:6px 10px;background:#23222b;color:inherit;border:1px solid #34323d;border-radius:4px;width:320px"> <span id="lastmark" class="ok"></span></p>
+<p>Recorder: <span id="rec">checking…</span> · messages: <b id="n">0</b> · posted: <b id="p">0</b> · last: <span id="last"></span></p>
+<div id="log"></div>
+<script>
+const REC = "http://127.0.0.1:5180/np3";
+const $ = id => document.getElementById(id);
+let access, input, queue = [], all = [], n = 0, posted = 0, timer;
+fetch(REC).then(r => r.text()).then(t => $("rec").innerHTML = `<span class=ok>${t.trim()}</span>`).catch(() => $("rec").innerHTML = `<span class=bad>not running (python3 recorder.py in "Now Playing 3 Overlays")</span>`);
+function log(s){ const el=$("log"); el.textContent += s + "\n"; el.scrollTop = el.scrollHeight; }
+if (!navigator.requestMIDIAccess) {
+  log("This browser has no Web MIDI (Safari and Firefox do not). Open this page in Google Chrome:  open -a 'Google Chrome' http://127.0.0.1:5180/tap");
+  $("start").disabled = true; $("port").innerHTML = "<option>no Web MIDI in this browser</option>";
+}
+navigator.requestMIDIAccess && navigator.requestMIDIAccess({ sysex: false }).then(a => {
+  access = a;
+  const fill = () => { $("port").innerHTML = ""; for (const [id, inp] of a.inputs) { const o = document.createElement("option"); o.value = id; o.textContent = `${inp.name} (${inp.manufacturer||"?"})`; $("port").appendChild(o); } };
+  fill(); a.onstatechange = fill;
+  log(a.inputs.size ? `Web MIDI ready, ${a.inputs.size} input(s). Pick the controller and press Start.` : "Web MIDI ready but no inputs: is the controller on and plugged in?");
+}).catch(e => log("Web MIDI permission refused or unavailable: " + e));
+function decode(d){
+  const st = d[0] >> 4, ch = (d[0] & 15) + 1;
+  const kind = { 8: "note_off", 9: "note_on", 11: "cc", 14: "pitchbend", 10: "aftertouch", 12: "program" }[st] || ("status_" + st);
+  return { kind, ch, d1: d[1] ?? null, d2: d[2] ?? null };
+}
+const GESTURES = ["quick cut","fader slam","transformer chop","bassline swap","vocal swap","full kill","eq kill sweep","high duck","the drop","filter riser","filter wobble","backspin","scratch","vinyl brake","nudge","hot cue juggle","loop roll","beat jump","echo out","stem drop","trim boost","cue stutter","crossfader slam","long blend","clean transition","idle / nothing"];
+async function mark(label){
+  if (!input) { $("lastmark").innerHTML = '<span class=bad>Press Start first: the tap is not capturing, so a marker now would label nothing.</span>'; log("marker ignored: tap not started"); return; }
+  const m = { at: new Date().toISOString(), origin: "midi-tap", data: { type: "marker", label, port: input?.name || null } };
+  all.push({ kind: "marker", label, at: m.at });
+  try { await fetch(REC, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(m) }); $("lastmark").textContent = `marked "${label}" at ${m.at.slice(11,19)}Z`; log(`MARK ${label}`); }
+  catch (e) { log("marker post failed: " + e); }
+}
+for (const g of GESTURES) { const b = document.createElement("button"); b.textContent = g; b.style.margin = "2px"; b.onclick = () => mark(g); $("marks").appendChild(b); }
+$("mark").addEventListener("keydown", e => { if (e.key === "Enter" && $("mark").value.trim()) { mark($("mark").value.trim()); $("mark").value = ""; } });
+$("start").onclick = () => {
+  if (!access) { log("MIDI access not granted yet."); return; }
+  input = access.inputs.get($("port").value); if (!input) { log("No input selected."); return; }
+  const perf0 = performance.now(), wall0 = Date.now();
+  input.onmidimessage = e => {
+    const m = { ...decode(e.data), raw: Array.from(e.data), t: +(e.timeStamp - perf0).toFixed(3), at: new Date(wall0 + (e.timeStamp - perf0)).toISOString(), port: input.name };
+    queue.push(m); all.push(m); n++; $("n").textContent = n; $("last").textContent = `${m.kind} ch${m.ch} ${m.d1} ${m.d2}`;
+  };
+  timer = setInterval(flush, 250);
+  $("start").disabled = true; $("stop").disabled = false; log(`tapping ${input.name}`);
+  $("state").className = "ok"; $("state").textContent = `Tapping ${input.name}. Touch a knob and watch "messages" climb, then label gestures.`;
+};
+async function flush(){
+  if (!queue.length) return;
+  const batch = queue; queue = [];
+  try {
+    await fetch(REC, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ at: new Date().toISOString(), origin: "midi-tap", data: { type: "midi-batch", port: input.name, msgs: batch } }) });
+    posted += batch.length; $("p").textContent = posted;
+  } catch (e) { log("post failed: " + e); queue = batch.concat(queue); }
+}
+$("stop").onclick = () => { clearInterval(timer); flush(); if (input) input.onmidimessage = null; input = null; $("state").className = "bad"; $("state").textContent = "Tap stopped."; $("start").disabled = false; $("stop").disabled = true; log(`stopped after ${n} messages`); };
+$("dl").onclick = () => { const blob = new Blob([all.map(m => JSON.stringify(m)).join("\n")], { type: "application/x-ndjson" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `midi-tap-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`; a.click(); };
+</script>
