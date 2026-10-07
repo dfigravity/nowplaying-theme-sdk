@@ -1,0 +1,60 @@
+
+=== quick cut  @ 10:59:16  (8.0s window) ===
+  raw: 1192 msgs | np:mix states: 22
+    crossfader                   596
+    crossfader MSB: 596 msgs over 5935 ms, value 126→58 (min 0, max 127), rate 100/s
+
+=== fader slam  @ 10:59:30  (8.0s window) ===
+  raw: 1526 msgs | np:mix states: 12
+    deck1 fader                  391
+    deck2 fader                  372
+    deck1 fader MSB: 391 msgs over 5023 ms, value 127→127 (min 0, max 127), rate 78/s
+    deck2 fader MSB: 372 msgs over 6046 ms, value 126→0 (min 0, max 127), rate 62/s
+    state ch1 first→last: {'channelFader': (1, 0)} {}
+    state ch2 first→last: {'channelFader': (0, 1)} {}
+
+=== bassline swap  @ 10:59:46  (8.0s window) ===
+  raw: 518 msgs | np:mix states: 14
+    deck2 eqLow                  158
+    deck1 eqLow                  101
+
+=== vocal swap  @ 10:59:57  (8.0s window) ===
+  raw: 837 msgs | np:mix states: 18
+    deck1 eqMid                  226
+    deck2 eqMid                  192
+    state ch1 first→last: {'eqMid': (-1, -0.05)} {}
+    state ch2 first→last: {'eqMid': (-0.03, -1)} {}
+
+=== eq kill sweep  @ 11:00:09  (8.0s window) ===
+  raw: 1770 msgs | np:mix states: 67
+    deck2 eqHigh                 280
+    deck2 eqLow                  278
+    deck1 eqMid                  117
+    deck1 eqLow                  107
+    deck2 eqMid                  103
+    state ch1 first→last: {'eqLow': (0, -0.66), 'eqMid': (-0.02, -0.7)} {}
+    state ch2 first→last: {'eqMid': (-1, -0.03), 'eqHigh': (-0.11, 0)} {}
+
+=== nudge  @ 11:00:26  (8.0s window) ===
+  raw: 3552 msgs | np:mix states: 0
+    deck2 ring                   3552
+    deck2 ring: 3552 msgs over 7044 ms, ticks sum -23273, peak |delta| 25, backward 2897/3552, rate 504/s
+
+=== crossfader slam  @ 11:00:43  (7.7s window) ===
+  raw: 1140 msgs | np:mix states: 32
+    crossfader                   570
+    crossfader MSB: 570 msgs over 6300 ms, value 0→64 (min 0, max 127), rate 90/s
+
+=== echo out  @ 11:00:50  (8.0s window) ===
+  raw: 353 msgs | np:mix states: 4
+    fx level                     175
+    fx cc34                      175
+    deck1 play                   1
+
+=== backspin  @ 11:01:03  (8.0s window) ===
+  raw: 3140 msgs | np:mix states: 2
+    deck2 ring                   3051
+    deck2 platter                87
+    deck2 touch                  1
+    deck2 platter: 87 msgs over 86 ms, ticks sum -4276, peak |delta| 63, backward 87/87, rate 1012/s
+    deck2 ring: 3051 msgs over 3050 ms, ticks sum -117629, peak |delta| 63, backward 3051/3051, rate 1000/s

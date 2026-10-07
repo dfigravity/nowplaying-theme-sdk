@@ -1,0 +1,33 @@
+diff --git a/scripts/theme-meta.mjs b/scripts/theme-meta.mjs
+index 9215602..0f45c45 100644
+--- a/scripts/theme-meta.mjs
++++ b/scripts/theme-meta.mjs
+@@ -27,8 +27,11 @@ const stubPlugin = {
+   setup(pluginBuild) {
+     pluginBuild.onResolve({ filter: /.*/ }, (args) => {
+       const bare = !args.path.startsWith(".") && !args.path.startsWith("/");
+-      const style = args.path.endsWith(".css");
+-      if (args.kind === "entry-point" || (!bare && !style)) return null;
++      // Non-code relative imports (stylesheets, images, fonts, audio, raw
++      // text) are Vite concerns; the meta reader only needs `meta`, so stub
++      // them exactly like bare imports.
++      const asset = /\.(css|png|jpe?g|webp|gif|avif|svg|woff2?|ttf|otf|fnt|json|txt|mp3|ogg|wav)(\?.*)?$/i.test(args.path);
++      if (args.kind === "entry-point" || (!bare && !asset)) return null;
+       return { path: args.path, namespace: "stub" };
+     });
+     pluginBuild.onLoad({ filter: /.*/, namespace: "stub" }, () => ({
+diff --git a/vite.bundle.config.ts b/vite.bundle.config.ts
+index 1365bb5..18ceb24 100644
+--- a/vite.bundle.config.ts
++++ b/vite.bundle.config.ts
+@@ -32,6 +32,10 @@ export default defineConfig({
+     cssCodeSplit: false,
+     rollupOptions: {
+       output: {
++        // Keep every chunk inside entry.js: the bundle script copies only
++        // entry.js, so libraries that code-split via dynamic import (pixi.js
++        // picks its renderer that way) would otherwise ship as a stub.
++        inlineDynamicImports: true,
+         // Single asset file keeps the relative-path math in the host HTML
+         // predictable — the script references `entry.js` and `style.css`.
+         assetFileNames: (info) =>
