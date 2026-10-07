@@ -5,3 +5,7 @@ dist-bundle
 
 .env.local
 .env.*.local
+
+# macOS / exFAT sidecar files
+._*
+.DS_Store
